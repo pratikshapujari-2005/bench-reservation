@@ -288,7 +288,7 @@
 
     <div class="creator-tag">Created by Pratiksha G Pujari</div>
 
-    <script type="module">
+<script type="module">
       import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
       import {
         getDatabase,
@@ -333,6 +333,26 @@
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
       }
 
+      // --- DEVICE-BASED DAILY BOOKING COUNTER ---
+      function getDeviceBookingCount() {
+        const today = getTodayString();
+        const storedDate = localStorage.getItem("device_booking_date");
+        
+        // Reset counter if it's a new day
+        if (storedDate !== today) {
+          localStorage.setItem("device_booking_date", today);
+          localStorage.setItem("device_booking_count", "0");
+          return 0;
+        }
+        
+        return parseInt(localStorage.getItem("device_booking_count") || "0", 10);
+      }
+
+      function incrementDeviceBookingCount() {
+        const current = getDeviceBookingCount();
+        localStorage.setItem("device_booking_count", (current + 1).toString());
+      }
+
       function isBookingOpen() {
         const now = new Date();
         const currentHour = now.getHours();
@@ -348,22 +368,30 @@
 
       function updateTimeStatus() {
         const open = isBookingOpen();
-        if (open) {
-          timeBanner.textContent = `🟢 Reservations are OPEN for today (${getTodayString()})`;
-          timeBanner.style.backgroundColor = "#dcfce7";
-          timeBanner.style.color = "#15803d";
-          reserveBtn.disabled = false;
-        } else {
+        const deviceCount = getDeviceBookingCount();
+
+        if (!open) {
           timeBanner.textContent = `🔒 Reservations closed for today.`;
           timeBanner.style.backgroundColor = "#fef3c7";
           timeBanner.style.color = "#b45309";
           reserveBtn.disabled = true;
+        } else if (deviceCount >= 2) {
+          timeBanner.textContent = `⚠️ Daily Limit Reached: You have already made 2 reservations from this device today.`;
+          timeBanner.style.backgroundColor = "#fee2e2";
+          timeBanner.style.color = "#991b1b";
+          reserveBtn.disabled = true;
+        } else {
+          timeBanner.textContent = `🟢 Reservations OPEN (${getTodayString()}) — Benches booked from this device: ${deviceCount}/2`;
+          timeBanner.style.backgroundColor = "#dcfce7";
+          timeBanner.style.color = "#15803d";
+          reserveBtn.disabled = false;
         }
       }
 
       function renderGrid() {
         gridContainer.innerHTML = "";
         const open = isBookingOpen();
+        const deviceCount = getDeviceBookingCount();
 
         for (let r = 1; r <= ROWS; r++) {
           for (let c = 1; c <= COLS; c++) {
@@ -382,10 +410,9 @@
               bench.title = `Reserved by: ${liveBookings[index].student} at ${liveBookings[index].time}`;
             } else {
               bench.textContent = `Bench R${r}C${c}`;
-              if (!open) {
+              if (!open || deviceCount >= 2) {
                 bench.classList.add("disabled");
               } else {
-                // DIRECT CLICK EVENT
                 bench.onclick = (e) => {
                   e.stopPropagation();
                   selectBench(index);
@@ -405,7 +432,7 @@
       }
 
       function selectBench(index) {
-        if (!isBookingOpen()) return;
+        if (!isBookingOpen() || getDeviceBookingCount() >= 2) return;
 
         if (selectedBenchIndex === index) {
           selectedBenchIndex = null;
@@ -413,7 +440,6 @@
           selectedBenchIndex = index;
         }
 
-        // Re-render immediately to update visual selection
         renderGrid();
       }
 
@@ -439,11 +465,19 @@
         );
       }
 
+      // --- RESERVATION ACTION ---
       reserveBtn.addEventListener("click", () => {
         const studentName = studentInput.value.trim();
+        const deviceCount = getDeviceBookingCount();
+
+        // 1. CHECK DEVICE LIMIT
+        if (deviceCount >= 2) {
+          showStatus("❌ Limit reached! You cannot book more than 2 benches per day from this device.", "#ef4444");
+          return;
+        }
 
         if (!studentName) {
-          showStatus("Please enter your name or student ID.", "#ef4444");
+          showStatus("Please enter the student's name or ID.", "#ef4444");
           return;
         }
 
@@ -466,17 +500,25 @@
           database,
           `benches/${today}/${selectedClass}/${selectedBenchIndex}`,
         );
+
         set(seatRef, {
           student: studentName,
           time: new Date().toLocaleTimeString(),
         })
           .then(() => {
+            // INCREMENT DEVICE LOCK COUNTER
+            incrementDeviceBookingCount();
+            const newCount = getDeviceBookingCount();
+
             showStatus(
-              `Reserved Bench R${row}C${col} for ${studentName}!`,
+              `✅ Reserved Bench R${row}C${col} for ${studentName}! (${newCount}/2 bookings used on this device today)`,
               "#22c55e",
             );
+            
             studentInput.value = "";
             selectedBenchIndex = null;
+            updateTimeStatus();
+            renderGrid();
           })
           .catch((err) => {
             showStatus("Failed to reserve: " + err.message, "#ef4444");
